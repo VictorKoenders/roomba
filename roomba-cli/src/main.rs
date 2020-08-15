@@ -2,7 +2,7 @@ mod cli;
 mod tui;
 
 use async_std::task::block_on;
-use roomba::{api, Client};
+use roomba::{api, packet::RoombaPacket, Client};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use structopt::StructOpt;
@@ -123,26 +123,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
             };
 
-            println!(
-                "Warning: please hold the Home button for 2 seconds and check that the ring led \
-                is blinking blue."
-            );
-
             let password = loop {
+                println!(
+                    "Please hold the Home button for 2 seconds and check that the ring led is blinking blue or your roomba made a sound."
+                );
+                std::thread::sleep(std::time::Duration::from_secs(5));
                 match Client::get_password(hostname) {
                     Err(err) => {
                         println!("{}", err);
-                        std::thread::sleep(std::time::Duration::from_secs(3));
+                        std::thread::sleep(std::time::Duration::from_secs(5));
                     }
-                    Ok(password) => break password,
+                    Ok(RoombaPacket::Password(password)) => break password,
+                    Ok(RoombaPacket::Unknown(n, blob)) => {
+                        panic!("Unknown roomba packet: {} with data {:?}", n, blob);
+                    }
+                    Ok(RoombaPacket::ErrorPleasePressTheHomeButton) => {}
                 }
             };
 
-            println!("Password: {}", password);
+            println!("Password: {:?}", password);
 
             if !no_save {
                 config.hostname = Some(hostname.to_string());
-                config.password = Some(password);
+                config.password = Some(password.expect_string());
                 save_config(config);
             }
 

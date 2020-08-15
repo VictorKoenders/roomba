@@ -1,14 +1,14 @@
-use crate::api::{Info, Message};
+use crate::{
+    api::{Info, Message},
+    packet::{RequestPacket, RoombaPacket},
+};
 use futures::stream::{FusedStream, StreamExt};
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use std::collections::HashSet;
-use std::io::Read;
-use std::io::Write;
 use std::net::{TcpStream, UdpSocket};
 use std::str;
 
 const DISCOVERY_PACKET: &[u8] = b"irobotmcs";
-const GET_PASSWORD_PACKET: &[u8] = &[0xf0, 0x05, 0xef, 0xcc, 0x3b, 0x29, 0x00];
 
 pub struct Client {
     pub mqtt: paho_mqtt::AsyncClient,
@@ -65,7 +65,7 @@ impl Client {
         Discovery::new()
     }
 
-    pub fn get_password<H: AsRef<str>>(hostname: H) -> std::io::Result<String> {
+    pub fn get_password<H: AsRef<str>>(hostname: H) -> std::io::Result<RoombaPacket> {
         trace!("starting procedure to get a password...");
 
         let mut builder = SslConnector::builder(SslMethod::tls())?;
@@ -76,45 +76,16 @@ impl Client {
         let uri = format!("{}:8883", hostname.as_ref());
         trace!("connecting to: {}...", uri);
         let socket = TcpStream::connect(uri)?;
-        socket.set_read_timeout(Some(std::time::Duration::from_secs(3)))?;
+        socket.set_read_timeout(Some(std::time::Duration::from_secs(60)))?;
         trace!("starting TLS transaction...");
-        let mut stream = connector
+        let stream = connector
             .connect("ignore", socket)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err.to_string()))?;
 
-        let mut attempts = 0;
-        loop {
-            let mut data = Vec::new();
+        let mut iterator = super::packet::RoombaPacketIterator::new(stream);
 
-            attempts += 1;
-            stream.write_all(GET_PASSWORD_PACKET)?;
-            match stream.read_to_end(&mut data) {
-                Err(err) if attempts < 3 => {
-                    trace!("error receiving password (attempt: {}): {}", attempts, err);
-                }
-                Err(err) => {
-                    debug!(
-                        "failed receiving password ({} attempts made): {}",
-                        attempts, err
-                    );
-                    return Err(err);
-                }
-                Ok(_) => {
-                    if let Some(password) = data
-                        .rsplit(|&x| x == 0)
-                        .filter(|x| !x.is_empty())
-                        .find_map(|x| String::from_utf8(x.to_vec()).ok())
-                    {
-                        break Ok(password);
-                    } else {
-                        debug!(
-                            "could not parse data: {}",
-                            String::from_utf8_lossy(data.as_slice())
-                        );
-                    }
-                }
-            }
-        }
+        iterator.send(RequestPacket::Password)?;
+        iterator.next()
     }
 }
 
